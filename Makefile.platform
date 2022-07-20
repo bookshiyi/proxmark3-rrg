@@ -9,9 +9,6 @@ PLATFORM_SIZE=256
 STANDALONE=
 SKIP_HITAG=1
 SKIP_FELICA=1
-SKIP_ISO14443b=1
-SKIP_ISO14443a=1
-SKIP_ISO15693=1
 
 
 # If you want more than one PLATFORM_EXTRAS option, separate them by spaces:
