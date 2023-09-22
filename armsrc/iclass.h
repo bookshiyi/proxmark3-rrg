@@ -25,6 +25,7 @@ void SniffIClass(uint8_t jam_search_len, uint8_t *jam_search_string);
 void ReaderIClass(uint8_t flags);
 
 void iClass_WriteBlock(uint8_t *msg);
+void iclass_credit_epurse(iclass_credit_epurse_t *payload);
 void iClass_Dump(uint8_t *msg);
 
 void iClass_Restore(iclass_restore_req_t *msg);
@@ -38,8 +39,8 @@ void iClass_Authentication_fast(iclass_chk_t *p);
 bool iclass_auth(iclass_auth_req_t *payload, uint8_t *out);
 
 void iClass_ReadBlock(uint8_t *msg);
-bool iclass_read_block(uint16_t blockno, uint8_t *data, uint32_t *start_time, uint32_t *eof_time);
+bool iclass_read_block(uint16_t blockno, uint8_t *data, uint32_t *start_time, uint32_t *eof_time, bool shallow_mod);
 
-bool select_iclass_tag(picopass_hdr_t *hdr, bool use_credit_key, uint32_t *eof_time);
+bool select_iclass_tag(picopass_hdr_t *hdr, bool use_credit_key, uint32_t *eof_time, bool shallow_mod);
 bool authenticate_iclass_tag(iclass_auth_req_t *payload, picopass_hdr_t *hdr, uint32_t *start_time, uint32_t *eof_time, uint8_t *mac_out);
 #endif

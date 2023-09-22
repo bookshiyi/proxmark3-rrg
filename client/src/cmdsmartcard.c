@@ -174,7 +174,7 @@ static void PrintATR(uint8_t *atr, size_t atrlen) {
 
     if (T0 & 0x80) {
         uint8_t TD1 = atr[2 + T1len];
-        PrintAndLogEx(INFO, "    - TD1 (First offered transmission protocol, presence of TA2..TD2) [ 0x%02x ] Protocol T%d", TD1, TD1 & 0x0f);
+        PrintAndLogEx(INFO, "    - TD1 (First offered transmission protocol, presence of TA2..TD2) [ 0x%02x ] Protocol " _GREEN_("T%d"), TD1, TD1 & 0x0f);
         protocol_T0_present = false;
         if ((TD1 & 0x0f) == 0) {
             protocol_T0_present = true;
@@ -199,7 +199,7 @@ static void PrintATR(uint8_t *atr, size_t atrlen) {
         }
         if (TD1 & 0x80) {
             uint8_t TDi = atr[2 + T1len + TD1len];
-            PrintAndLogEx(INFO, "    - TD2 (A supported protocol or more global parameters, presence of TA3..TD3) [ 0x%02x ] Protocol T%d", TDi, TDi & 0x0f);
+            PrintAndLogEx(INFO, "    - TD2 (A supported protocol or more global parameters, presence of TA3..TD3) [ 0x%02x ] Protocol " _GREEN_("T%d"), TDi, TDi & 0x0f);
             if ((TDi & 0x0f) == 0) {
                 protocol_T0_present = true;
             }
@@ -317,6 +317,7 @@ static int smart_wait(uint8_t *out, int maxoutlen, bool verbose) {
 static int smart_responseEx(uint8_t *out, int maxoutlen, bool verbose) {
 
     int datalen = smart_wait(out, maxoutlen, verbose);
+    int totallen = datalen;
     bool needGetData = false;
 
     if (datalen < 2) {
@@ -327,8 +328,26 @@ static int smart_responseEx(uint8_t *out, int maxoutlen, bool verbose) {
         needGetData = true;
     }
 
-    if (needGetData) {
+    if (needGetData == true) {
+        // Don't discard data we already received except the SW code.
+        // If we only received 1 byte, this is the echo of INS, we discard it.
+        totallen -= 2;
+        if (totallen == 1) {
+            totallen = 0;
+        }
+        int ofs = totallen;
+        maxoutlen -= totallen;
+        PrintAndLogEx(DEBUG, "Keeping data (%d bytes): %s", ofs, sprint_hex(out, ofs));
+
         int len = out[datalen - 1];
+        if (len == 0 || len > MAX_APDU_SIZE) {
+            // Cap the data length or the smartcard may send us a buffer we can't handle
+            len = MAX_APDU_SIZE;
+        }
+        if (maxoutlen < len) {
+            // We don't have enough buffer to hold the next part
+            goto out;
+        }
 
         if (verbose) PrintAndLogEx(INFO, "Requesting " _YELLOW_("0x%02X") " bytes response", len);
 
@@ -342,7 +361,7 @@ static int smart_responseEx(uint8_t *out, int maxoutlen, bool verbose) {
         SendCommandNG(CMD_SMART_RAW, (uint8_t *)payload, sizeof(smart_card_raw_t) + sizeof(cmd_getresp));
         free(payload);
 
-        datalen = smart_wait(out, maxoutlen, verbose);
+        datalen = smart_wait(&out[ofs], maxoutlen, verbose);
 
         if (datalen < 2) {
             goto out;
@@ -352,7 +371,7 @@ static int smart_responseEx(uint8_t *out, int maxoutlen, bool verbose) {
         if (datalen != len + 2) {
             // data with ACK
             if (datalen == len + 2 + 1) { // 2 - response, 1 - ACK
-                if (out[0] != ISO7816_GET_RESPONSE) {
+                if (out[ofs] != ISO7816_GET_RESPONSE) {
                     if (verbose) {
                         PrintAndLogEx(ERR, "GetResponse ACK error. len 0x%x | data[0] %02X", len, out[0]);
                     }
@@ -361,7 +380,8 @@ static int smart_responseEx(uint8_t *out, int maxoutlen, bool verbose) {
                 }
 
                 datalen--;
-                memmove(out, &out[1], datalen);
+                memmove(&out[ofs], &out[ofs + 1], datalen);
+                totallen += datalen;
             } else {
                 // wrong length
                 if (verbose) {
@@ -372,7 +392,7 @@ static int smart_responseEx(uint8_t *out, int maxoutlen, bool verbose) {
     }
 
 out:
-    return datalen;
+    return totallen;
 }
 
 static int smart_response(uint8_t *out, int maxoutlen) {
@@ -396,6 +416,7 @@ static int CmdSmartRaw(const char *Cmd) {
         arg_lit0("s", NULL, "active smartcard with select (get ATR)"),
         arg_lit0("t", "tlv", "executes TLV decoder if it possible"),
         arg_lit0("0", NULL, "use protocol T=0"),
+        arg_int0(NULL, "timeout", "<ms>", "Timeout in MS waiting for SIM to respond. (def 337ms)"),
         arg_str1("d", "data", "<hex>", "bytes to send"),
         arg_param_end
     };
@@ -406,10 +427,11 @@ static int CmdSmartRaw(const char *Cmd) {
     bool active_select = arg_get_lit(ctx, 3);
     bool decode_tlv = arg_get_lit(ctx, 4);
     bool use_t0 = arg_get_lit(ctx, 5);
+    int timeout = arg_get_int_def(ctx, 6, -1);
 
     int dlen = 0;
     uint8_t data[PM3_CMD_DATA_SIZE] = {0x00};
-    int res = CLIParamHexToBuf(arg_get_str(ctx, 6), data, sizeof(data), &dlen);
+    int res = CLIParamHexToBuf(arg_get_str(ctx, 7), data, sizeof(data), &dlen);
     CLIParserFree(ctx);
 
     if (res) {
@@ -432,6 +454,13 @@ static int CmdSmartRaw(const char *Cmd) {
         if (active_select)
             payload->flags |= SC_SELECT;
     }
+    
+    payload->wait_delay = 0;
+    if (timeout > -1) {
+        payload->flags |= SC_WAIT;
+        payload->wait_delay = timeout;
+    }
+    PrintAndLogEx(DEBUG, "SIM Card timeout... %u ms", payload->wait_delay);
 
     if (dlen > 0) {
         if (use_t0)
@@ -501,8 +530,8 @@ static int CmdSmartUpgrade(const char *Cmd) {
 
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "smart upgrade",
-                  "Upgrade RDV4.0 sim module firmware",
-                  "smart upgrade -f sim011.bin"
+                  "Upgrade RDV4 sim module firmware",
+                  "smart upgrade -f sim013.bin"
                  );
 
     void *argtable[] = {
@@ -513,7 +542,7 @@ static int CmdSmartUpgrade(const char *Cmd) {
     CLIExecWithReturn(ctx, Cmd, argtable, true);
     int fnlen = 0;
     char filename[FILE_PATH_SIZE] = {0};
-    CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filename, sizeof(filename), &fnlen);
+    CLIParamStrToBuf(arg_get_str(ctx, 1), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
     CLIParserFree(ctx);
 
     char *bin_extension = filename;
@@ -670,7 +699,7 @@ static int CmdSmartInfo(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_lit0("v", "verbose", "verbose"),
+        arg_lit0("v", "verbose", "verbose output"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -699,7 +728,7 @@ static int CmdSmartInfo(const char *Cmd) {
 
     // print header
     PrintAndLogEx(INFO, "--- " _CYAN_("Smartcard Information") " ---------");
-    PrintAndLogEx(INFO, "ISO7618-3 ATR... %s", sprint_hex(card.atr, card.atr_len));
+    PrintAndLogEx(INFO, "ISO7816-3 ATR... %s", sprint_hex(card.atr, card.atr_len));
     // convert bytes to str.
     char *hexstr = calloc((card.atr_len << 1) + 1, sizeof(uint8_t));
     if (hexstr == NULL) {
@@ -748,7 +777,7 @@ static int CmdSmartReader(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_lit0("v", "verbose", "verbose"),
+        arg_lit0("v", "verbose", "verbose output"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);

@@ -65,8 +65,8 @@ void ProxGuiQT::HideGraphWindow(void) {
 }
 
 // emit picture viewer signals
-void ProxGuiQT::ShowPictureWindow(char *fn) {
-    emit ShowPictureWindowSignal(fn);
+void ProxGuiQT::ShowPictureWindow(const QImage &img) {
+    emit ShowPictureWindowSignal(img);
 }
 
 void ProxGuiQT::ShowBase64PictureWindow(char *b64) {
@@ -116,23 +116,13 @@ void ProxGuiQT::_HideGraphWindow(void) {
 }
 
 // picture viewer
-void ProxGuiQT::_ShowPictureWindow(char *fn) {
+void ProxGuiQT::_ShowPictureWindow(const QImage &img) {
 
     if (!plotapp)
         return;
 
-    if (fn == NULL)
+    if (img.isNull())
         return;
-
-    size_t slen = strlen(fn);
-    if (slen == 0)
-        return;
-
-    char *myfn = (char *)calloc(slen + 1, sizeof(uint8_t));
-    if (myfn == NULL)
-        return;
-
-    memcpy(myfn, fn, slen);
 
     if (!pictureWidget) {
 
@@ -143,12 +133,7 @@ void ProxGuiQT::_ShowPictureWindow(char *fn) {
         pictureWidget = new PictureWidget();
     }
 
-    QPixmap pm;
-    if (pm.load(myfn) == false) {
-        qWarning("Failed to load %s", myfn);
-    }
-    free(myfn);
-    free(fn);
+    QPixmap pm = QPixmap::fromImage(img);
 
     //QPixmap newPixmap = pm.scaled(QSize(50,50),  Qt::KeepAspectRatio);
     //pm = pm.scaled(pictureController->lbl_pm->size(),  Qt::KeepAspectRatio);
@@ -264,7 +249,7 @@ void ProxGuiQT::MainLoop() {
     connect(this, SIGNAL(ExitSignal()), this, SLOT(_Exit()));
 
     // hook up picture viewer signals
-    connect(this, SIGNAL(ShowPictureWindowSignal(char *)), this, SLOT(_ShowPictureWindow(char *)));
+    connect(this, SIGNAL(ShowPictureWindowSignal(const QImage &)), this, SLOT(_ShowPictureWindow(const QImage &)));
     connect(this, SIGNAL(ShowBase64PictureWindowSignal(char *)), this, SLOT(_ShowBase64PictureWindow(char *)));
     connect(this, SIGNAL(RepaintPictureWindowSignal()), this, SLOT(_RepaintPictureWindow()));
     connect(this, SIGNAL(HidePictureWindowSignal()), this, SLOT(_HidePictureWindow()));
@@ -809,7 +794,7 @@ void Plot::paintEvent(QPaintEvent *event) {
             snprintf(scalestr, sizeof(scalestr), "[%2.2f %s] ", ((int32_t)(CursorBPos - CursorAPos)) / g_CursorScaleFactor, g_CursorScaleFactorUnit);
         }
     }
-    snprintf(str, sizeof(str), "@%u..%u  dt=%i %szoom=%2.2f  CursorAPos=%u  CursorBPos=%u  GridX=%lf  GridY=%lf (%s) GridXoffset=%lf",
+    snprintf(str, sizeof(str), "@%u..%u  dt=%i %szoom=%2.3f  CursorAPos=%u  CursorBPos=%u  GridX=%lf  GridY=%lf (%s) GridXoffset=%lf",
              g_GraphStart,
              g_GraphStop,
              CursorBPos - CursorAPos,
@@ -853,17 +838,25 @@ void Plot::closeEvent(QCloseEvent *event) {
     gs_useOverlays = false;
 }
 
+// every 4 steps the zoom doubles (or halves)
+#define ZOOM_STEP (1.189207)
+// limit zoom to 32 times in either direction
+#define ZOOM_LIMIT (32)
+
 void Plot::Zoom(double factor, uint32_t refX) {
+    double g_GraphPixelsPerPointNew = g_GraphPixelsPerPoint * factor;
+
     if (factor >= 1) { // Zoom in
-        if (g_GraphPixelsPerPoint <= 25 * factor) {
-            g_GraphPixelsPerPoint *= factor;
+        if (g_GraphPixelsPerPointNew <= ZOOM_LIMIT) {
+            g_GraphPixelsPerPoint = g_GraphPixelsPerPointNew;
             if (refX > g_GraphStart) {
                 g_GraphStart += (refX - g_GraphStart) - ((refX - g_GraphStart) / factor);
             }
         }
     } else {          // Zoom out
-        if (g_GraphPixelsPerPoint >= 0.01 / factor) {
-            g_GraphPixelsPerPoint *= factor;
+        if (g_GraphPixelsPerPointNew >= (1.0 / ZOOM_LIMIT)) {
+            g_GraphPixelsPerPoint = g_GraphPixelsPerPointNew;
+            // shift graph towards refX when zooming out
             if (refX > g_GraphStart) {
                 if (g_GraphStart >= ((refX - g_GraphStart) / factor) - (refX - g_GraphStart)) {
                     g_GraphStart -= ((refX - g_GraphStart) / factor) - (refX - g_GraphStart);
@@ -900,7 +893,6 @@ void Plot::Move(int offset) {
 
 void Plot::Trim(void) {
     uint32_t lref, rref;
-    const double zoom_offset = 1.148698354997035; // 2**(1/5)
     if ((CursorAPos == 0) || (CursorBPos == 0)) { // if we don't have both cursors set
         lref = g_GraphStart;
         rref = g_GraphStop;
@@ -917,12 +909,12 @@ void Plot::Trim(void) {
     } else {
         lref = CursorAPos < CursorBPos ? CursorAPos : CursorBPos;
         rref = CursorAPos < CursorBPos ? CursorBPos : CursorAPos;
-        // g_GraphPixelsPerPoint mush remain a power of zoom_offset
+        // g_GraphPixelsPerPoint must remain a power of ZOOM_STEP
         double GPPPtarget = g_GraphPixelsPerPoint * (g_GraphStop - g_GraphStart) / (rref - lref);
         while (g_GraphPixelsPerPoint < GPPPtarget) {
-            g_GraphPixelsPerPoint *= zoom_offset;
+            g_GraphPixelsPerPoint *= ZOOM_STEP;
         }
-        g_GraphPixelsPerPoint /= zoom_offset;
+        g_GraphPixelsPerPoint /= ZOOM_STEP;
         CursorAPos -= lref;
         CursorBPos -= lref;
     }
@@ -940,34 +932,26 @@ void Plot::wheelEvent(QWheelEvent *event) {
     const float move_offset = 0.05;
     // -120+shift => zoom in  (5 times = *2)
     //  120+shift => zoom out (5 times = /2)
-    const double zoom_offset = 1.148698354997035; // 2**(1/5)
-    if (event->modifiers() & Qt::ShiftModifier) {
-// event->position doesn't exist in QT5.12.8, both exist in 5.14.2 and event->x doesn't exist in 5.15.0
 #if QT_VERSION >= 0x050d00
-        uint32_t x = event->position().x();
+    // event->position doesn't exist in QT5.12.8, both exist in 5.14.2 and event->x doesn't exist in 5.15.0
+    uint32_t x = event->position().x();
+    // event->angleDelta doesn't exist in QT4, both exist in 5.12.8 and 5.14.2 and event->delta doesn't exist in 5.15.0
+    float delta = -event->angleDelta().y();
 #else
-        uint32_t x = event->x();
+    uint32_t x = event->x();
+    float delta = -event->delta();
 #endif
+    if (event->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier)) {
         x -= WIDTH_AXES;
         x = (int)(x / g_GraphPixelsPerPoint);
         x += g_GraphStart;
-// event->angleDelta doesn't exist in QT4, both exist in 5.12.8 and 5.14.2 and event->delta doesn't exist in 5.15.0
-#if QT_VERSION >= 0x050d00
-        float delta = event->angleDelta().y();
-#else
-        float delta = event->delta();
-#endif
         if (delta < 0) {
-            Zoom(zoom_offset, x);
+            Zoom(ZOOM_STEP, x);
         } else {
-            Zoom(1.0 / zoom_offset, x);
+            Zoom(1.0 / ZOOM_STEP, x);
         }
     } else {
-#if QT_VERSION >= 0x050d00
-        Move(PageWidth * (-(float)event->angleDelta().y() / (120 / move_offset)));
-#else
-        Move(PageWidth * (-(float)event->delta() / (120 / move_offset)));
-#endif
+        Move(PageWidth * delta * move_offset / 120);
     }
     this->update();
 }
@@ -987,7 +971,6 @@ void Plot::mouseMoveEvent(QMouseEvent *event) {
 
 void Plot::keyPressEvent(QKeyEvent *event) {
     uint32_t offset; // Left/right movement offset (in sample size)
-    const double zoom_offset = 1.148698354997035; // 2**(1/5)
 
     if (event->modifiers() & Qt::ShiftModifier) {
         if (g_PlotGridX)
@@ -998,22 +981,22 @@ void Plot::keyPressEvent(QKeyEvent *event) {
         if (event->modifiers() & Qt::ControlModifier)
             offset = 1;
         else
-            offset = (int)(20 / g_GraphPixelsPerPoint);
+            offset = int(ZOOM_LIMIT / g_GraphPixelsPerPoint);
     }
 
     switch (event->key()) {
         case Qt::Key_Down:
             if (event->modifiers() & Qt::ShiftModifier) {
                 if (event->modifiers() & Qt::ControlModifier) {
-                    Zoom(zoom_offset, CursorBPos);
+                    Zoom(ZOOM_STEP, CursorBPos);
                 } else {
-                    Zoom(2, CursorBPos);
+                    Zoom(ZOOM_STEP * 2, CursorBPos);
                 }
             } else {
                 if (event->modifiers() & Qt::ControlModifier) {
-                    Zoom(zoom_offset, CursorAPos);
+                    Zoom(ZOOM_STEP, CursorAPos);
                 } else {
-                    Zoom(2, CursorAPos);
+                    Zoom(ZOOM_STEP * 2, CursorAPos);
                 }
             }
             break;
@@ -1021,15 +1004,15 @@ void Plot::keyPressEvent(QKeyEvent *event) {
         case Qt::Key_Up:
             if (event->modifiers() & Qt::ShiftModifier) {
                 if (event->modifiers() & Qt::ControlModifier) {
-                    Zoom(1.0 / zoom_offset, CursorBPos);
+                    Zoom(1.0 / ZOOM_STEP, CursorBPos);
                 } else {
-                    Zoom(0.5, CursorBPos);
+                    Zoom(1.0 / (ZOOM_STEP * 2), CursorBPos);
                 }
             } else {
                 if (event->modifiers() & Qt::ControlModifier) {
-                    Zoom(1.0 / zoom_offset, CursorAPos);
+                    Zoom(1.0 / ZOOM_STEP, CursorAPos);
                 } else {
-                    Zoom(0.5, CursorAPos);
+                    Zoom(1.0 / (ZOOM_STEP * 2), CursorAPos);
                 }
             }
             break;

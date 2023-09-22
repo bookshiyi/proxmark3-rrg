@@ -37,11 +37,10 @@ OBJDIR = obj
 ifeq ($(USE_BREW),1)
 	INCLUDES += -I$(BREW_PREFIX)/include
 	LDLIBS += -L$(BREW_PREFIX)/lib
-	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(BREW_PREFIX)/opt/qt/lib/pkgconfig
-	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(BREW_PREFIX)/opt/qt5/lib/pkgconfig
+	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(BREW_PREFIX)/lib/pkgconfig:$(BREW_PREFIX)/opt/qt/lib/pkgconfig:$(BREW_PREFIX)/opt/qt5/lib/pkgconfig
 endif
 
-ifdef ($(USE_MACPORTS),1)
+ifeq ($(USE_MACPORTS),1)
 	INCLUDES += -I$(MACPORTS_PREFIX)/include
 	LDLIBS += -L$(MACPORTS_PREFIX)/lib
 	PKG_CONFIG_ENV := PKG_CONFIG_PATH=$(MACPORTS_PREFIX)/lib/pkgconfig
@@ -94,7 +93,6 @@ LUALIBLD =
 LUAPLATFORM = generic
 ifneq (,$(findstring MINGW,$(platform)))
     LUAPLATFORM = mingw
-	LDLIBS += -lws2_32
 else
     ifeq ($(platform),Darwin)
         LUAPLATFORM = macosx
@@ -102,6 +100,11 @@ else
         LUALIBLD +=  -ldl
         LUAPLATFORM = linux
     endif
+endif
+
+## Winsock2
+ifneq (,$(findstring MINGW,$(platform)))
+	LDLIBS += -lws2_32
 endif
 
 ## Reveng
@@ -239,6 +242,9 @@ endif
 ## BZIP2
 LDLIBS += -lbz2
 
+## LZ4
+LDLIBS += -llz4
+
 ## Bluez (optional)
 ifneq ($(SKIPBT),1)
     BTINCLUDES = $(shell $(PKG_CONFIG_ENV) pkg-config --cflags bluez 2>/dev/null)
@@ -290,6 +296,7 @@ ifneq ($(SKIPQT),1)
     QTLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs Qt5Core Qt5Widgets 2>/dev/null)
     MOC = $(shell $(PKG_CONFIG_ENV) pkg-config --variable=host_bins Qt5Core)/moc
     UIC = $(shell $(PKG_CONFIG_ENV) pkg-config --variable=host_bins Qt5Core)/uic
+    QMAKE = $(shell $(PKG_CONFIG_ENV) pkg-config --variable=host_bins Qt5Core)/qmake
     ifneq ($(QTLDLIBS),)
         QT5_FOUND = 1
     else
@@ -298,6 +305,7 @@ ifneq ($(SKIPQT),1)
         QTLDLIBS = $(shell $(PKG_CONFIG_ENV) pkg-config --libs QtCore QtGui 2>/dev/null)
         MOC = $(shell $(PKG_CONFIG_ENV) pkg-config --variable=moc_location QtCore)
         UIC = $(shell $(PKG_CONFIG_ENV) pkg-config --variable=uic_location QtCore)
+        QMAKE = $(shell $(PKG_CONFIG_ENV) pkg-config --variable=exec_prefix QtCore)/bin/qmake
     endif
     ifeq ($(QTLDLIBS),)
         # if both pkg-config commands failed, search in common places
@@ -314,6 +322,7 @@ ifneq ($(SKIPQT),1)
             endif
             MOC = $(QTDIR)/bin/moc
             UIC = $(QTDIR)/bin/uic
+            QMAKE = $(QTDIR)/bin/qmake
         endif
     endif
     ifneq ($(QTLDLIBS),)
@@ -363,6 +372,8 @@ endif
 
 #######################################################################################################
 CFLAGS ?= $(DEFCFLAGS)
+CFLAGS += $(MYDEFS) $(MYCFLAGS) $(MYINCLUDES)
+
 # We cannot just use CFLAGS+=... because it has impact on sub-makes if CFLAGS is defined in env:
 PM3CFLAGS = $(CFLAGS)
 PM3CFLAGS += -g -I./src -I./include -I../include -I../common -I../common_fpga $(PM3INCLUDES) $(INCLUDES)
@@ -405,6 +416,8 @@ endif
 PM3CFLAGS += -DHAVE_SNPRINTF
 
 CXXFLAGS ?= -Wall -Werror -O3
+CXXFLAGS += $(MYDEFS) $(MYCXXFLAGS) $(MYINCLUDES)
+
 PM3CXXFLAGS = $(CXXFLAGS)
 PM3CXXFLAGS += -I../include -I./include
 
@@ -420,9 +433,17 @@ endif
 PM3CXXFLAGS += -DHAVE_SNPRINTF
 
 LDFLAGS ?= $(DEFLDFLAGS)
+LDFLAGS += $(MYLDFLAGS)
+
 PM3LDFLAGS = $(LDFLAGS)
 ifeq ($(platform),Darwin)
-    PM3LDFLAGS += -framework Foundation -framework AppKit
+    ifeq ($(shell uname -p),arm64)
+        # The platform is iOS
+        PM3LDFLAGS += -framework Foundation -framework UIKit
+    else
+        # M* macOS devices return arm
+        PM3LDFLAGS += -framework Foundation -framework AppKit
+    endif
 endif
 
 ###################
@@ -438,9 +459,9 @@ ifeq ($(SKIPQT),1)
 else
     ifeq ($(QT_FOUND),1)
         ifeq ($(QT5_FOUND),1)
-            $(info GUI support:       QT5 found, enabled ($(shell QT_SELECT=5 qmake -v 2>/dev/null|grep -o 'Qt version.*')))
+            $(info GUI support:       QT5 found, enabled ($(shell QT_SELECT=5 $(QMAKE) -v 2>/dev/null|grep -o 'Qt version.*')))
         else
-            $(info GUI support:       QT4 found, enabled ($(shell QT_SELECT=4 qmake -v 2>/dev/null|grep -o 'Qt version.*')))
+            $(info GUI support:       QT4 found, enabled ($(shell QT_SELECT=4 $(QMAKE) -v 2>/dev/null|grep -o 'Qt version.*')))
         endif
     else
         $(info GUI support:       QT not found, disabled)
@@ -479,7 +500,7 @@ ifeq ($(SKIPPYTHON),1)
         $(info Python3 library:   skipped)
 else
     ifeq ($(PYTHON_FOUND),1)
-        $(info Python3 library:   Python3 v$(shell pkg-config --modversion python3) found, enabled)
+        $(info Python3 library:   Python3 v$(shell $(PKG_CONFIG_ENV) pkg-config --modversion python3) found, enabled)
     else
         $(info Python3 library:   Python3 not found, disabled)
     endif
@@ -575,9 +596,11 @@ SRCS =  mifare/aiddesfire.c \
 		cmdhfseos.c \
 		cmdhfst.c \
 		cmdhfst25ta.c \
+		cmdhftesla.c \
 		cmdhfthinfilm.c \
 		cmdhftopaz.c \
 		cmdhftexkom.c \
+		cmdhfvas.c \
 		cmdhfwaveshare.c \
 		cmdhfxerox.c \
 		cmdhw.c \
@@ -618,6 +641,7 @@ SRCS =  mifare/aiddesfire.c \
 		cmdmain.c \
 		cmdnfc.c \
 		cmdparser.c \
+		cmdpiv.c \
 		cmdscript.c \
 		cmdsmartcard.c \
 		cmdtrace.c \
@@ -657,6 +681,7 @@ SRCS =  mifare/aiddesfire.c \
 		generator.c \
 		graph.c \
 		jansson_path.c \
+		iso4217.c \
 		iso7816/apduinfo.c \
 		iso7816/iso7816core.c \
 		loclass/cipher.c \
@@ -750,14 +775,19 @@ all-static: LDLIBS:=-static $(LDLIBS)
 all-static: $(BINS)
 
 proxmark3: $(OBJS) $(STATICLIBS) lualibs/pm3_cmd.lua lualibs/mfc_default_keys.lua
-	$(info [=] LD $@)
-	$(Q)$(LD) $(PM3LDFLAGS) $(OBJS) $(STATICLIBS) $(LDLIBS) -o $@
+	$(info [=] CXX $@)
+#	$(Q)$(CXX) $(PM3LDFLAGS) $(OBJS) $(STATICLIBS) $(LDLIBS) -o $@
+	$(Q)$(CXX) $(PM3CFLAGS) $(PM3LDFLAGS) $(OBJS) $(STATICLIBS) $(LDLIBS) -o $@
 
 src/proxgui.cpp: src/ui/ui_overlays.h src/ui/ui_image.h
+
+src/proxguiqt.cpp: src/proxguiqt.h
 
 src/proxguiqt.moc.cpp: src/proxguiqt.h
 	$(info [-] MOC $@)
 	$(Q)$(MOC) -o$@ $^
+
+src/proxguiqt.h: src/ui/ui_overlays.h src/ui/ui_image.h
 
 src/ui/ui_overlays.h: src/ui/overlays.ui
 	$(info [-] UIC $@)
@@ -888,10 +918,10 @@ src/pm3_pywrap.c: pm3.i
 
 .PHONY: all clean install uninstall tarbin .FORCE
 
-# version_pm3.c should be remade on every compilation
+# version_pm3.c should be checked on every compilation
 src/version_pm3.c: default_version_pm3.c .FORCE
-	$(info [=] GEN $@)
-	$(Q)$(SH) ../tools/mkversion.sh > $@ || $(CP) $< $@
+	$(info [=] CHECK $@)
+	$(Q)$(SH) ../tools/mkversion.sh $@ || $(CP) $< $@
 
 # easy printing of MAKE VARIABLES
 print-%: ; @echo $* = $($*)

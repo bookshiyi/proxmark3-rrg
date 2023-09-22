@@ -46,6 +46,15 @@
 #include "dbprint.h"
 #include "ticks.h"
 
+static bool IsKeyBReadable(uint8_t blockNo) {
+    uint8_t sector_trailer[16];
+    emlGetMem(sector_trailer, SectorTrailer(blockNo), 1);
+    uint8_t AC = ((sector_trailer[7] >> 5) & 0x04)
+                 | ((sector_trailer[8] >> 2) & 0x02)
+                 | ((sector_trailer[8] >> 7) & 0x01);
+    return (AC == 0x00 || AC == 0x01 || AC == 0x02);
+}
+
 static bool IsTrailerAccessAllowed(uint8_t blockNo, uint8_t keytype, uint8_t action) {
     uint8_t sector_trailer[16];
     emlGetMem(sector_trailer, blockNo, 1);
@@ -486,6 +495,13 @@ void Mifare1ksim(uint16_t flags, uint8_t exitAfterNReads, uint8_t *datain, uint1
     uint8_t *rats = NULL;
     uint8_t rats_len = 0;
 
+
+    // if fct is called with NULL we need to assign some memory since this pointer is passaed around
+    uint8_t datain_tmp[10] = {0};
+    if (datain == NULL) {
+        datain = datain_tmp;
+    }
+
     //Here, we collect UID,sector,keytype,NT,AR,NR,NT2,AR2,NR2
     // This will be used in the reader-only attack.
 
@@ -507,7 +523,7 @@ void Mifare1ksim(uint16_t flags, uint8_t exitAfterNReads, uint8_t *datain, uint1
     uint8_t rAUTH_NT_keystream[4];
     uint32_t nonce = 0;
 
-    tUart14a *uart = GetUart14a();
+    const tUart14a *uart = GetUart14a();
 
     // free eventually allocated BigBuf memory but keep Emulator Memory
     BigBuf_free_keep_EM();
@@ -865,13 +881,25 @@ void Mifare1ksim(uint16_t flags, uint8_t exitAfterNReads, uint8_t *datain, uint1
                         break;
                     }
                     */
-
-                    if (MifareBlockToSector(receivedCmd_dec[1]) != cardAUTHSC) {
+                    blockNo = receivedCmd_dec[1];
+                    if (MifareBlockToSector(blockNo) != cardAUTHSC) {
                         EmSend4bit(mf_crypto1_encrypt4bit(pcs, CARD_NACK_NA));
                         FpgaDisableTracing();
 
                         if (g_dbglevel >= DBG_ERROR)
                             Dbprintf("[MFEMUL_WORK] Reader tried to operate (0x%02x) on block (0x%02x) not authenticated for (0x%02x), nacking", receivedCmd_dec[0], receivedCmd_dec[1], cardAUTHSC);
+                        break;
+                    }
+
+                    // Compliance of MIFARE Classic EV1 1K Datasheet footnote of Table 8
+                    // If access bits show that key B is Readable, any subsequent memory access will be refused.
+
+                    if (cardAUTHKEY == AUTHKEYB && IsKeyBReadable(blockNo)) {
+                        EmSend4bit(mf_crypto1_encrypt4bit(pcs, CARD_NACK_NA));
+                        FpgaDisableTracing();
+
+                        if (g_dbglevel >= DBG_ERROR)
+                            Dbprintf("[MFEMUL_WORK] Access denied: Reader tried to access memory on authentication with key B while key B is readable in sector (0x%02x)", cardAUTHSC);
                         break;
                     }
                 }
@@ -1244,7 +1272,7 @@ void Mifare1ksim(uint16_t flags, uint8_t exitAfterNReads, uint8_t *datain, uint1
                                 memcpy(receivedCmd_dec, response, 16); // don't change anything
                             }
                         }
-                        emlSetMem(receivedCmd_dec, cardWRBL, 1);
+                        emlSetMem_xt(receivedCmd_dec, cardWRBL, 1, 16);
                         EmSend4bit(mf_crypto1_encrypt4bit(pcs, CARD_ACK)); // always ACK?
                         FpgaDisableTracing();
 

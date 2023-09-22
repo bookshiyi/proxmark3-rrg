@@ -37,9 +37,11 @@ typedef struct {
 } hintAIDList_t;
 
 int CmdHF14A(const char *Cmd);
-int CmdHF14ASniff(const char *Cmd); // used by hf topaz sniff
-int CmdHF14ASim(const char *Cmd);   // used by hf mfu sim
-int CmdHF14ANdefRead(const char *Cmd);
+int CmdHF14ASniff(const char *Cmd);         // used by hf topaz sniff
+int CmdHF14ASim(const char *Cmd);           // used by hf mfu sim
+int CmdHF14ANdefRead(const char *Cmd);      // used by cmdnfc.c
+int CmdHF14ANdefFormat(const char *Cmd);    // used by cmdnfc.c
+int CmdHF14ANdefWrite(const char *Cmd);     // used by cmdnfc.c
 
 int hf14a_getconfig(hf14a_config *config);
 int hf14a_setconfig(hf14a_config *config, bool verbose);
@@ -50,5 +52,10 @@ int Hf14443_4aGetCardData(iso14a_card_select_t *card);
 int ExchangeAPDU14a(uint8_t *datain, int datainlen, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
 int ExchangeRAW14a(uint8_t *datain, int datainlen, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen, bool silentMode);
 
+iso14a_polling_parameters_t iso14a_get_polling_parameters(bool use_ecp, bool use_magsafe);
 int SelectCard14443A_4(bool disconnect, bool verbose, iso14a_card_select_t *card);
+int SelectCard14443A_4_WithParameters(bool disconnect, bool verbose, iso14a_card_select_t *card, iso14a_polling_parameters_t *polling_parameters);
+
+bool Get_apdu_in_framing(void);
+void Set_apdu_in_framing(bool v);
 #endif

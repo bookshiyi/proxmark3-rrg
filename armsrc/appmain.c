@@ -60,6 +60,8 @@
 #include "ticks.h"
 #include "commonutil.h"
 #include "crc16.h"
+#include "protocols.h"
+#include "mifareutil.h"
 
 
 #ifdef WITH_LCD
@@ -345,7 +347,7 @@ static void print_debug_level(void) {
     char dbglvlstr[20] = {0};
     switch (g_dbglevel) {
         case DBG_NONE:
-            sprintf(dbglvlstr, "none");
+            sprintf(dbglvlstr, "off");
             break;
         case DBG_ERROR:
             sprintf(dbglvlstr, "error");
@@ -451,6 +453,12 @@ static void SendCapabilities(void) {
 #ifdef WITH_FPC_USART
     if (g_reply_via_fpc)
         capabilities.baudrate = g_usart_baudrate;
+#endif
+
+#ifdef RDV4
+    capabilities.is_rdv4 = true;
+#else
+    capabilities.is_rdv4 = false;
 #endif
 
 #ifdef WITH_FLASH
@@ -774,6 +782,15 @@ static void PacketReceived(PacketCommandNG *packet) {
         case CMD_QUIT_SESSION: {
             g_reply_via_fpc = false;
             g_reply_via_usb = false;
+            break;
+        }
+        case CMD_SET_FPGAMODE: {
+            uint8_t mode = packet->data.asBytes[0];
+            if (mode >= FPGA_BITSTREAM_LF && mode <= FPGA_BITSTREAM_HF_15) {
+                FpgaDownloadAndGo(mode);
+                reply_ng(CMD_SET_FPGAMODE, PM3_SUCCESS, NULL, 0);
+            }
+            reply_ng(CMD_SET_FPGAMODE, PM3_EINVARG, NULL, 0);
             break;
         }
         // emulator
@@ -1137,27 +1154,27 @@ static void PacketReceived(PacketCommandNG *packet) {
 
 #ifdef WITH_EM4x50
         case CMD_LF_EM4X50_INFO: {
-            em4x50_info((em4x50_data_t *)packet->data.asBytes, true);
+            em4x50_info((const em4x50_data_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_WRITE: {
-            em4x50_write((em4x50_data_t *)packet->data.asBytes, true);
+            em4x50_write((const em4x50_data_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_WRITEPWD: {
-            em4x50_writepwd((em4x50_data_t *)packet->data.asBytes, true);
+            em4x50_writepwd((const em4x50_data_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_READ: {
-            em4x50_read((em4x50_data_t *)packet->data.asBytes, true);
+            em4x50_read((const em4x50_data_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_BRUTE: {
-            em4x50_brute((em4x50_data_t *)packet->data.asBytes, true);
+            em4x50_brute((const em4x50_data_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_LOGIN: {
-            em4x50_login((uint32_t *)packet->data.asBytes, true);
+            em4x50_login((const uint32_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_SIM: {
@@ -1167,7 +1184,7 @@ static void PacketReceived(PacketCommandNG *packet) {
             // destroy the Emulator Memory.
             //-----------------------------------------------------------------------------
             FpgaDownloadAndGo(FPGA_BITSTREAM_LF);
-            em4x50_sim((uint32_t *)packet->data.asBytes, true);
+            em4x50_sim((const uint32_t *)packet->data.asBytes, true);
             break;
         }
         case CMD_LF_EM4X50_READER: {
@@ -1191,7 +1208,7 @@ static void PacketReceived(PacketCommandNG *packet) {
             // destroy the Emulator Memory.
             //-----------------------------------------------------------------------------
             FpgaDownloadAndGo(FPGA_BITSTREAM_LF);
-            em4x50_chk((uint8_t *)packet->data.asBytes, true);
+            em4x50_chk((const char *)packet->data.asBytes, true);
             break;
         }
 #endif
@@ -1219,6 +1236,10 @@ static void PacketReceived(PacketCommandNG *packet) {
         }
         case CMD_LF_EM4X70_WRITEKEY: {
             em4x70_write_key((em4x70_data_t *)packet->data.asBytes, true);
+            break;
+        }
+        case CMD_LF_EM4X70_BRUTE: {
+            em4x70_brute((em4x70_data_t *)packet->data.asBytes, true);
             break;
         }
 #endif
@@ -1256,12 +1277,27 @@ static void PacketReceived(PacketCommandNG *packet) {
             ReaderIso15693(NULL);
             break;
         }
+        case CMD_HF_ISO15693_EML_CLEAR: {
+            EmlClearIso15693();
+            break;
+        }
+        case CMD_HF_ISO15693_EML_SETMEM: {
+            struct p {
+                uint32_t offset;
+                uint8_t count;
+                uint8_t data[];
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            emlSet(payload->data, payload->offset, payload->count);
+            break;
+        }
         case CMD_HF_ISO15693_SIMULATE: {
             struct p {
                 uint8_t uid[8];
+                uint8_t block_size;
             } PACKED;
             struct p *payload = (struct p *) packet->data.asBytes;
-            SimTagIso15693(payload->uid);
+            SimTagIso15693(payload->uid, payload->block_size);
             break;
         }
         case CMD_HF_ISO15693_CSETUID: {
@@ -1272,20 +1308,76 @@ static void PacketReceived(PacketCommandNG *packet) {
             SetTag15693Uid(payload->uid);
             break;
         }
-        case CMD_HF_ISO15693_SLIX_L_DISABLE_PRIVACY: {
+        case CMD_HF_ISO15693_SLIX_DISABLE_EAS: {
             struct p {
                 uint8_t pwd[4];
+                bool usepwd;
             } PACKED;
             struct p *payload = (struct p *) packet->data.asBytes;
-            DisablePrivacySlixLIso15693(payload->pwd);
+            DisableEAS_AFISlixIso15693(payload->pwd, payload->usepwd);
             break;
         }
-        case CMD_HF_ISO15693_SLIX_L_DISABLE_AESAFI: {
+        case CMD_HF_ISO15693_SLIX_ENABLE_EAS: {
+            struct p {
+                uint8_t pwd[4];
+                bool usepwd;
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            EnableEAS_AFISlixIso15693(payload->pwd, payload->usepwd);
+            break;
+        }
+        case CMD_HF_ISO15693_SLIX_WRITE_PWD: {
+            struct p {
+                uint8_t old_pwd[4];
+                uint8_t new_pwd[4];
+                uint8_t pwd_id;
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            WritePasswordSlixIso15693(payload->old_pwd, payload->new_pwd, payload->pwd_id);
+            break;
+        }
+        case CMD_HF_ISO15693_SLIX_DISABLE_PRIVACY: {
             struct p {
                 uint8_t pwd[4];
             } PACKED;
             struct p *payload = (struct p *) packet->data.asBytes;
-            DisableEAS_AFISlixLIso15693(payload->pwd);
+            DisablePrivacySlixIso15693(payload->pwd);
+            break;
+        }
+        case CMD_HF_ISO15693_SLIX_ENABLE_PRIVACY: {
+            struct p {
+                uint8_t pwd[4];
+            } PACKED;
+            struct p *payload = (struct p *)packet->data.asBytes;
+            EnablePrivacySlixIso15693(payload->pwd);
+            break;
+        }
+        case CMD_HF_ISO15693_SLIX_PASS_PROTECT_AFI: {
+            struct p {
+                uint8_t pwd[4];
+            } PACKED;
+            struct p *payload = (struct p *)packet->data.asBytes;
+            PassProtectAFISlixIso15693(payload->pwd);
+            break;
+        }
+        case CMD_HF_ISO15693_WRITE_AFI: {
+            struct p {
+                uint8_t pwd[4];
+                bool use_pwd;
+                uint8_t uid[8];
+                bool use_uid;
+                uint8_t afi;
+            } PACKED;
+            struct p *payload = (struct p *)packet->data.asBytes;
+            WriteAFIIso15693(payload->pwd, payload->use_pwd, payload->uid, payload->use_uid, payload->afi);
+            break;
+        }
+        case CMD_HF_ISO15693_SLIX_PASS_PROTECT_EAS: {
+            struct p {
+                uint8_t pwd[4];
+            } PACKED;
+            struct p *payload = (struct p *)packet->data.asBytes;
+            PassProtextEASSlixIso15693(payload->pwd);
             break;
         }
 
@@ -1449,6 +1541,7 @@ static void PacketReceived(PacketCommandNG *packet) {
             iso14443a_antifuzz(payload->flag);
             break;
         }
+        // EPA related
         case CMD_HF_EPA_COLLECT_NONCE: {
             EPA_PACE_Collect_Nonce(packet);
             break;
@@ -1457,6 +1550,11 @@ static void PacketReceived(PacketCommandNG *packet) {
             EPA_PACE_Replay(packet);
             break;
         }
+        case CMD_HF_EPA_PACE_SIMULATE: {
+            EPA_PACE_Simulate(packet);
+            break;
+        }
+
         case CMD_HF_MIFARE_READER: {
             struct p {
                 uint8_t first_run;
@@ -1469,7 +1567,9 @@ static void PacketReceived(PacketCommandNG *packet) {
         }
         case CMD_HF_MIFARE_READBL: {
             mf_readblock_t *payload = (mf_readblock_t *)packet->data.asBytes;
-            MifareReadBlock(payload->blockno, payload->keytype, payload->key);
+            uint8_t outbuf[16];
+            int16_t retval = mifare_cmd_readblocks(MIFARE_AUTH_KEYA + (payload->keytype & 1), payload->key, ISO14443A_CMD_READBLOCK, payload->blockno, 1, outbuf);
+            reply_ng(CMD_HF_MIFARE_READBL, retval, outbuf, sizeof(outbuf));
             break;
         }
         case CMD_HF_MIFAREU_READBL: {
@@ -1493,11 +1593,23 @@ static void PacketReceived(PacketCommandNG *packet) {
             break;
         }
         case CMD_HF_MIFARE_WRITEBL: {
-            MifareWriteBlock(packet->oldarg[0], packet->oldarg[1], packet->data.asBytes);
+            uint8_t block_no = packet->oldarg[0];
+            uint8_t key_type = packet->oldarg[1];
+            uint8_t *key = packet->data.asBytes;
+            uint8_t *block_data = packet->data.asBytes + 10;
+
+            int16_t retval = mifare_cmd_writeblocks(MIFARE_AUTH_KEYA + (key_type & 1), key, ISO14443A_CMD_WRITEBLOCK, block_no, 1, block_data);
+
+            // convert ng style retval to old status
+            if (retval >= 0) {
+                retval = 1;
+            }
+
+            reply_mix(CMD_ACK, retval, 0, 0, 0, 0);
             break;
         }
         case CMD_HF_MIFARE_VALUE: {
-            MifareValue(packet->oldarg[0], packet->oldarg[1], packet->data.asBytes);
+            MifareValue(packet->oldarg[0], packet->oldarg[1], packet->oldarg[2], packet->data.asBytes);
             break;
         }
         case CMD_HF_MIFAREU_WRITEBL: {
@@ -1582,7 +1694,14 @@ static void PacketReceived(PacketCommandNG *packet) {
                 uint8_t data[];
             } PACKED;
             struct p *payload = (struct p *) packet->data.asBytes;
-            MifareEMemSet(payload->blockno, payload->blockcnt, payload->blockwidth, payload->data);
+
+            FpgaDownloadAndGo(FPGA_BITSTREAM_HF);
+
+            // backwards compat... default bytewidth
+            if (payload->blockwidth == 0)
+                payload->blockwidth = 16;
+
+            emlSetMem_xt(payload->data, payload->blockno, payload->blockcnt, payload->blockwidth);
             break;
         }
         case CMD_HF_MIFARE_EML_MEMGET: {
@@ -1599,7 +1718,7 @@ static void PacketReceived(PacketCommandNG *packet) {
             MifareECardLoadExt(payload->sectorcnt, payload->keytype);
             break;
         }
-        // Work with "magic Chinese" card
+        // Gen1a / 1b - "magic Chinese" card
         case CMD_HF_MIFARE_CSETBL: {
             MifareCSetBlock(packet->oldarg[0], packet->oldarg[1], packet->data.asBytes);
             break;
@@ -1626,13 +1745,57 @@ static void PacketReceived(PacketCommandNG *packet) {
             MifareGen3Freez();
             break;
         }
+        // Gen 4 GTU magic cards
         case CMD_HF_MIFARE_G4_RDBL: {
             struct p {
                 uint8_t blockno;
                 uint8_t pwd[4];
+                uint8_t workFlags;
             } PACKED;
             struct p *payload = (struct p *) packet->data.asBytes;
-            MifareG4ReadBlk(payload->blockno, payload->pwd);
+            MifareG4ReadBlk(payload->blockno, payload->pwd, payload->workFlags);
+            break;
+        }
+        case CMD_HF_MIFARE_G4_WRBL: {
+            struct p {
+                uint8_t blockno;
+                uint8_t pwd[4];
+                uint8_t data[16]; // data to be written
+                uint8_t workFlags;
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            MifareG4WriteBlk(payload->blockno, payload->pwd, payload->data, payload->workFlags);
+            break;
+        }
+        case CMD_HF_MIFARE_G4_GDM_CONFIG: {
+            struct p {
+                uint8_t key[6];
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            uint8_t outbuf[16];
+            int16_t retval = mifare_cmd_readblocks(MIFARE_MAGIC_GDM_AUTH_KEY, payload->key, MIFARE_MAGIC_GDM_READ_CFG, 0, 1, outbuf);
+            reply_ng(CMD_HF_MIFARE_G4_GDM_CONFIG, retval, outbuf, sizeof(outbuf));
+            break;
+        }
+        case CMD_HF_MIFARE_G4_GDM_WRCFG: {
+            struct p {
+                uint8_t data[16];
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            uint8_t key[6] = {0, 0, 0, 0, 0, 0};
+            int16_t retval = mifare_cmd_writeblocks(MIFARE_MAGIC_GDM_AUTH_KEY, key, MIFARE_MAGIC_GDM_WRITE_CFG, 0, 1, payload->data);
+            reply_ng(CMD_HF_MIFARE_G4_GDM_WRCFG, retval, NULL, 0);
+            break;
+        }
+        case CMD_HF_MIFARE_G4_GDM_WRBL: {
+            struct p {
+                uint8_t blockno;
+                uint8_t key[6];
+                uint8_t data[16]; // data to be written
+            } PACKED;
+            struct p *payload = (struct p *) packet->data.asBytes;
+            int16_t retval = mifare_cmd_writeblocks(MIFARE_MAGIC_GDM_AUTH_KEY, payload->key, MIFARE_MAGIC_GDM_WRITEBLOCK, payload->blockno, 1, payload->data);
+            reply_ng(CMD_HF_MIFARE_G4_GDM_WRBL, retval, NULL, 0);
             break;
         }
         case CMD_HF_MIFARE_PERSONALIZE_UID: {
@@ -1777,6 +1940,10 @@ static void PacketReceived(PacketCommandNG *packet) {
             iClass_Restore((iclass_restore_req_t *)packet->data.asBytes);
             break;
         }
+        case CMD_HF_ICLASS_CREDIT_EPURSE: {
+            iclass_credit_epurse((iclass_credit_epurse_t *)packet->data.asBytes);
+            break;
+        }
 #endif
 
 #ifdef WITH_HFSNIFF
@@ -1887,11 +2054,16 @@ static void PacketReceived(PacketCommandNG *packet) {
                 uint32_t waittime;
             } PACKED;
             struct p *payload = (struct p *) &packet->data.asBytes;
+
             uint16_t available;
             uint16_t pre_available = 0;
             uint8_t *dest = BigBuf_malloc(USART_FIFOLEN);
             uint32_t wait = payload->waittime;
+
+            StartTicks();
+
             uint32_t ti = GetTickCount();
+
             while (true) {
                 WaitMS(50);
                 available = usart_rxdata_available();
@@ -1912,6 +2084,8 @@ static void PacketReceived(PacketCommandNG *packet) {
             } else {
                 reply_ng(CMD_USART_RX, PM3_ENODATA, NULL, 0);
             }
+
+            StopTicks();
             BigBuf_free();
             LED_B_OFF();
             break;
@@ -1924,11 +2098,16 @@ static void PacketReceived(PacketCommandNG *packet) {
             } PACKED;
             struct p *payload = (struct p *) &packet->data.asBytes;
             usart_writebuffer_sync(payload->data, packet->length - sizeof(payload));
+
             uint16_t available;
             uint16_t pre_available = 0;
             uint8_t *dest = BigBuf_malloc(USART_FIFOLEN);
             uint32_t wait = payload->waittime;
+
+            StartTicks();
+
             uint32_t ti = GetTickCount();
+
             while (true) {
                 WaitMS(50);
                 available = usart_rxdata_available();
@@ -1943,12 +2122,15 @@ static void PacketReceived(PacketCommandNG *packet) {
                 if (GetTickCountDelta(ti) > wait)
                     break;
             }
+
             if (available > 0) {
                 uint16_t len = usart_read_ng(dest, available);
                 reply_ng(CMD_USART_TXRX, PM3_SUCCESS, dest, len);
             } else {
                 reply_ng(CMD_USART_TXRX, PM3_ENODATA, NULL, 0);
             }
+
+            StopTicks();
             BigBuf_free();
             LED_B_OFF();
             break;
@@ -2166,20 +2348,26 @@ static void PacketReceived(PacketCommandNG *packet) {
             uint32_t size = packet->oldarg[1];
 
             uint8_t *buff = BigBuf_malloc(size);
-            rdv40_spiffs_read_as_filetype((char *)filename, (uint8_t *)buff, size, RDV40_SPIFFS_SAFETY_SAFE);
+            if (buff == NULL) {
+                if (g_dbglevel >= DBG_DEBUG) Dbprintf("Could not allocate buffer");
+                // Trigger a finish downloading signal with an PM3_EMALLOC
+                reply_ng(CMD_SPIFFS_DOWNLOAD, PM3_EMALLOC, NULL, 0);
+            } else {
+                rdv40_spiffs_read_as_filetype((char *)filename, (uint8_t *)buff, size, RDV40_SPIFFS_SAFETY_SAFE);
+                // arg0 = filename
+                // arg1 = size
+                // arg2 = RFU
 
-            // arg0 = filename
-            // arg1 = size
-            // arg2 = RFU
-
-            for (size_t i = 0; i < size; i += PM3_CMD_DATA_SIZE) {
-                size_t len = MIN((size - i), PM3_CMD_DATA_SIZE);
-                int result = reply_old(CMD_SPIFFS_DOWNLOADED, i, len, 0, buff + i, len);
-                if (result != PM3_SUCCESS)
-                    Dbprintf("transfer to client failed ::  | bytes between %d - %d (%d) | result: %d", i, i + len, len, result);
+                for (size_t i = 0; i < size; i += PM3_CMD_DATA_SIZE) {
+                    size_t len = MIN((size - i), PM3_CMD_DATA_SIZE);
+                    int result = reply_old(CMD_SPIFFS_DOWNLOADED, i, len, 0, buff + i, len);
+                    if (result != PM3_SUCCESS)
+                        Dbprintf("transfer to client failed ::  | bytes between %d - %d (%d) | result: %d", i, i + len, len, result);
+                }
+                // Trigger a finish downloading signal with an ACK frame
+                reply_ng(CMD_SPIFFS_DOWNLOAD, PM3_SUCCESS, NULL, 0);
+                BigBuf_free();
             }
-            // Trigger a finish downloading signal with an ACK frame
-            reply_ng(CMD_SPIFFS_DOWNLOAD, PM3_SUCCESS, NULL, 0);
             LED_B_OFF();
             break;
         }
@@ -2286,6 +2474,30 @@ static void PacketReceived(PacketCommandNG *packet) {
             LED_B_OFF();
             break;
         }
+        case CMD_SPIFFS_ELOAD: {
+            LED_B_ON();
+
+            uint8_t *em = BigBuf_get_EM_addr();
+            if (em == NULL) {
+                reply_ng(CMD_SPIFFS_ELOAD, PM3_EMALLOC, NULL, 0);
+                LED_B_OFF();
+                break;
+            }
+
+            char *fn = (char *)packet->data.asBytes;
+
+            uint32_t size = size_in_spiffs(fn);
+            if (size == 0) {
+                reply_ng(CMD_SPIFFS_ELOAD, PM3_SUCCESS, NULL, 0);
+                LED_B_OFF();
+                break;
+            }
+
+            rdv40_spiffs_read_as_filetype(fn, em, size, RDV40_SPIFFS_SAFETY_SAFE);
+            reply_ng(CMD_SPIFFS_ELOAD, PM3_SUCCESS, NULL, 0);
+            LED_B_OFF();
+            break;
+        }
         case CMD_FLASHMEM_SET_SPIBAUDRATE: {
             if (packet->length != sizeof(uint32_t))
                 break;
@@ -2308,6 +2520,9 @@ static void PacketReceived(PacketCommandNG *packet) {
                 Flash_WriteEnable();
                 Flash_Erase4k(3, 0xC);
             } else if (payload->startidx ==  DEFAULT_MF_KEYS_OFFSET) {
+                Flash_CheckBusy(BUSY_TIMEOUT);
+                Flash_WriteEnable();
+                Flash_Erase4k(3, 0x8);
                 Flash_CheckBusy(BUSY_TIMEOUT);
                 Flash_WriteEnable();
                 Flash_Erase4k(3, 0x9);
@@ -2341,8 +2556,11 @@ static void PacketReceived(PacketCommandNG *packet) {
                 LED_B_OFF();
                 break;
             }
-            if (page < 3)
+            if (page < 3) {
                 isok = Flash_WipeMemoryPage(page);
+                // let spiffs check and update its info post flash erase
+                rdv40_spiffs_check();
+            }
 
             reply_mix(CMD_ACK, isok, 0, 0, 0, 0);
             LED_B_OFF();
@@ -2509,6 +2727,7 @@ void  __attribute__((noreturn)) AppMain(void) {
     SpinDelay(100);
     BigBuf_initialize();
 
+    // Add stack canary
     for (uint32_t *p = _stack_start; p + 0x200 < _stack_end ; ++p) {
         *p = 0xdeadbeef;
     }
@@ -2544,18 +2763,20 @@ void  __attribute__((noreturn)) AppMain(void) {
 #endif
 
 #ifdef WITH_SMARTCARD
-    I2C_init();
+    I2C_init(false);
 #endif
 
-#ifdef WITH_FPC_USART
-    usart_init(USART_BAUD_RATE, USART_PARITY);
+#ifdef WITH_FLASH
+    if (FlashInit()) {
+        uint64_t flash_uniqueID = 0;
+        if (!Flash_CheckBusy(BUSY_TIMEOUT)) { // OK because firmware was built for devices with flash
+            Flash_UniqueID((uint8_t *)(&flash_uniqueID));
+        }
+        FlashStop();
+        usb_update_serial(flash_uniqueID);
+    }
 #endif
 
-    // This is made as late as possible to ensure enumeration without timeout
-    // against device such as http://www.hobbytronics.co.uk/usb-host-board-v2
-    usb_disable();
-    usb_enable();
-    allow_send_wtx = true;
 
 #ifdef WITH_FLASH
     // If flash is not present, BUSY_TIMEOUT kicks in, let's do it after USB
@@ -2564,8 +2785,21 @@ void  __attribute__((noreturn)) AppMain(void) {
     //
     // Enforce a spiffs check/garbage collection at boot so we are likely to never
     // fall under the 2 contigous free blocks availables
+    // This is a time-consuming process on large flash.
     rdv40_spiffs_check();
 #endif
+
+#ifdef WITH_FPC_USART
+    usart_init(USART_BAUD_RATE, USART_PARITY);
+#endif
+
+    // This is made as late as possible to ensure enumeration without timeout
+    // against device such as http://www.hobbytronics.co.uk/usb-host-board-v2
+    // In other words, keep the interval between usb_enable() and the main loop as short as possible.
+    // (AT91F_CDC_Enumerate() will be called in the main loop)
+    usb_disable();
+    usb_enable();
+    allow_send_wtx = true;
 
     for (;;) {
         WDT_HIT();
