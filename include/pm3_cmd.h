@@ -585,6 +585,7 @@ typedef struct {
 #define CMD_HF_ICLASS_RESTORE                                             0x039B
 #define CMD_HF_ICLASS_CREDIT_EPURSE                                       0x039C
 
+
 // For ISO1092 / FeliCa
 #define CMD_HF_FELICA_SIMULATE                                            0x03A0
 #define CMD_HF_FELICA_SNIFF                                               0x03A1
@@ -669,6 +670,7 @@ typedef struct {
 #define CMD_HF_MFU_COUNTER_TEAROFF                                        0x0741
 
 
+
 #define CMD_HF_SNIFF                                                      0x0800
 #define CMD_HF_PLOT                                                       0x0801
 
@@ -697,6 +699,11 @@ typedef struct {
 #define CMD_HF_MIFARE_G4_GDM_WRBL                                         0x0871
 #define CMD_HF_MIFARE_G4_GDM_CONFIG                                       0x0872
 #define CMD_HF_MIFARE_G4_GDM_WRCFG                                        0x0873
+
+// HID SAM
+#define CMD_HF_SAM_PICOPASS                                               0x0900
+#define CMD_HF_SAM_SEOS                                                   0x0901
+#define CMD_HF_SAM_MFC                                                    0x0902
 
 #define CMD_UNKNOWN                                                       0xFFFF
 
@@ -796,6 +803,9 @@ typedef struct {
 // STATIC Nonce detect                  pm3:  when collecting nonces for hardnested
 #define PM3_ESTATIC_NONCE     -25
 
+// No PACS data                         pm3:  when using HID SAM to retried PACS data
+#define PM3_ENOPACS           -26
+
 // No data                              pm3:        no data available, no host frame available (not really an error)
 #define PM3_ENODATA           -98
 // Quit program                         client:     reserved, order to quit the program
@@ -819,9 +829,11 @@ typedef struct {
 // took settings from libnfc/buses/uart.c
 
 // uart_windows.c & uart_posix.c
-# define UART_FPC_CLIENT_RX_TIMEOUT_MS  200
-# define UART_USB_CLIENT_RX_TIMEOUT_MS  20
-# define UART_TCP_CLIENT_RX_TIMEOUT_MS  500
+# define UART_FPC_CLIENT_RX_TIMEOUT_MS        200
+# define UART_USB_CLIENT_RX_TIMEOUT_MS        20
+# define UART_NET_CLIENT_RX_TIMEOUT_MS        500
+# define UART_TCP_LOCAL_CLIENT_RX_TIMEOUT_MS  40
+# define UART_UDP_LOCAL_CLIENT_RX_TIMEOUT_MS  20
 
 
 // CMD_DEVICE_INFO response packet has flags in arg[0], flag definitions:

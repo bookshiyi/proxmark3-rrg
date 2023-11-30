@@ -40,6 +40,8 @@
 #include "crypto/libpcrypto.h"
 #include "util.h" // xor
 #include "mbedtls/sha1.h"       // SHA1
+#include "cmdhf14a.h"
+#include "gen4.h"
 
 int mfDarkside(uint8_t blockno, uint8_t key_type, uint64_t *key) {
     uint32_t uid = 0;
@@ -1173,58 +1175,6 @@ int mfGen3Freeze(void) {
     }
 }
 
-int mfG4GetBlock(uint8_t *pwd, uint8_t blockno, uint8_t *data, uint8_t workFlags) {
-    struct p {
-        uint8_t blockno;
-        uint8_t pwd[4];
-        uint8_t workFlags;
-    } PACKED payload;
-    payload.blockno = blockno;
-    memcpy(payload.pwd, pwd, sizeof(payload.pwd));
-    payload.workFlags = workFlags;
-
-    clearCommandBuffer();
-    SendCommandNG(CMD_HF_MIFARE_G4_RDBL, (uint8_t *)&payload, sizeof(payload));
-    PacketResponseNG resp;
-    if (WaitForResponseTimeout(CMD_HF_MIFARE_G4_RDBL, &resp, 1500)) {
-        if (resp.status != PM3_SUCCESS) {
-            return PM3_EUNDEF;
-        }
-        memcpy(data, resp.data.asBytes, MFBLOCK_SIZE);
-    } else {
-        PrintAndLogEx(WARNING, "command execute timeout");
-        return PM3_ETIMEOUT;
-    }
-    return PM3_SUCCESS;
-}
-
-int mfG4SetBlock(uint8_t *pwd, uint8_t blockno, uint8_t *data, uint8_t workFlags) {
-    struct p {
-        uint8_t blockno;
-        uint8_t pwd[4];
-        uint8_t data[MFBLOCK_SIZE];
-        uint8_t workFlags;
-    } PACKED payload;
-    payload.blockno = blockno;
-    memcpy(payload.pwd, pwd, sizeof(payload.pwd));
-    memcpy(payload.data, data, sizeof(payload.data));
-    payload.workFlags = workFlags;
-
-    clearCommandBuffer();
-    SendCommandNG(CMD_HF_MIFARE_G4_WRBL, (uint8_t *)&payload, sizeof(payload));
-    PacketResponseNG resp;
-    if (WaitForResponseTimeout(CMD_HF_MIFARE_G4_WRBL, &resp, 1500)) {
-        if (resp.status != PM3_SUCCESS) {
-            return PM3_EUNDEF;
-        }
-    } else {
-        PrintAndLogEx(WARNING, "command execute timeout");
-        return PM3_ETIMEOUT;
-    }
-    return PM3_SUCCESS;
-}
-
-
 // variables
 uint32_t cuid = 0;    // uid part used for crypto1.
 
@@ -1464,6 +1414,15 @@ int read_mfc_ev1_signature(uint8_t *signature) {
         res = mfReadBlock(70, MF_KEY_B, g_mifare_signature_key_b, sign + 16);
         if (res ==  PM3_SUCCESS) {
             memcpy(signature, sign, sizeof(sign));
+        }
+    } else {
+        // try QL88
+        res = mfReadBlock(69, MF_KEY_B, g_mifare_ql88_signature_key_b, sign);
+        if (res == PM3_SUCCESS) {
+            res = mfReadBlock(70, MF_KEY_B, g_mifare_ql88_signature_key_b, sign + 16);
+            if (res ==  PM3_SUCCESS) {
+                memcpy(signature, sign, sizeof(sign));
+            }
         }
     }
     return res;

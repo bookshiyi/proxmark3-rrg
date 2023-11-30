@@ -2217,7 +2217,7 @@ static int CmdT55xxDump(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "lf t55xx dump",
                   "This command dumps a T55xx card Page 0 block 0-7.\n"
-                  "It will create three files (bin/eml/json)",
+                  "It will create two files (bin/json)",
                   "lf t55xx dump\n"
                   "lf t55xx dump -p aabbccdd --override\n"
                   "lf t55xx dump -f my_lf_dump"
@@ -2298,8 +2298,14 @@ static int CmdT55xxDump(const char *Cmd) {
         }
     }
 
+    if (nosave) {
+        PrintAndLogEx(INFO, "Called with no save option");
+        PrintAndLogEx(NORMAL, "");
+        return PM3_SUCCESS;
+    }
+
     // all ok, save dump to file
-    if (success && nosave == false) {
+    if (success) {
 
         // set default filename, if not set by user
         if (strlen(filename) == 0) {
@@ -2315,17 +2321,13 @@ static int CmdT55xxDump(const char *Cmd) {
         }
 
         // Swap endian so the files match the txt display
-        uint32_t data[T55x7_BLOCK_COUNT];
+        uint32_t data[T55x7_BLOCK_COUNT] = {0};
 
         for (int i = 0; i < T55x7_BLOCK_COUNT; i++) {
             data[i] = BSWAP_32(cardmem[i].blockdata);
         }
 
-        // saveFileEML will add .eml extension to filename
-        // saveFile (binary) passes in the .bin extension.
-        saveFileJSON(filename, jsfT55x7, (uint8_t *)data, T55x7_BLOCK_COUNT * sizeof(uint32_t), NULL);
-        saveFileEML(filename, (uint8_t *)data, T55x7_BLOCK_COUNT * sizeof(uint32_t), sizeof(uint32_t));
-        saveFile(filename, ".bin", data, sizeof(data));
+        pm3_save_dump(filename, (uint8_t *)data, (T55x7_BLOCK_COUNT * sizeof(uint32_t)), jsfT55x7);
     }
 
     return PM3_SUCCESS;
@@ -2340,7 +2342,7 @@ static int CmdT55xxRestore(const char *Cmd) {
 
     void *argtable[] = {
         arg_param_begin,
-        arg_str0("f", "file", "<fn>", "filename of dump file"),
+        arg_str0("f", "file", "<fn>", "Specify a filename for dump file"),
         arg_str0("p", "pwd", "<hex>", "password if target card has password set (4 hex bytes)"),
         arg_param_end
     };
@@ -3516,24 +3518,24 @@ bool tryDetectP1(bool getData) {
 
         if (FSKrawDemod(0, 0, 0, 0, false) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
 
         if (FSKrawDemod(0, 1, 0, 0, false) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
@@ -3545,13 +3547,13 @@ bool tryDetectP1(bool getData) {
     if (clk > 0) {
         if (ASKDemod_ext(0, 0, 1, 0, false, false, false, 1, &st) == PM3_SUCCESS) {
 
-            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) && 
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+            if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
@@ -3559,36 +3561,36 @@ bool tryDetectP1(bool getData) {
         st = true;
         if (ASKDemod_ext(0, 1, 1, 0, false, false, false, 1, &st) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
 
         if (ASKbiphaseDemod(0, 0, 0, 2, false) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
 
         if (ASKbiphaseDemod(0, 0, 1, 2, false) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
@@ -3599,24 +3601,24 @@ bool tryDetectP1(bool getData) {
     if (clk > 0) {
         if (NRZrawDemod(0, 0, 1, false) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
 
         if (NRZrawDemod(0, 1, 1, false) == PM3_SUCCESS) {
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
@@ -3633,12 +3635,12 @@ bool tryDetectP1(bool getData) {
         if (PSKDemod(0, 0, 6, false) == PM3_SUCCESS) {
             //save_restoreGB(GRAPH_RESTORE);
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
@@ -3646,12 +3648,12 @@ bool tryDetectP1(bool getData) {
         if (PSKDemod(0, 1, 6, false) == PM3_SUCCESS) {
             //save_restoreGB(GRAPH_RESTORE);
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         }
@@ -3662,12 +3664,12 @@ bool tryDetectP1(bool getData) {
 
             //save_restoreGB(GRAPH_RESTORE);
             if (preambleSearchEx(g_DemodBuffer, preamble_atmel, sizeof(preamble_atmel), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
-            
+
             if (preambleSearchEx(g_DemodBuffer, preamble_silicon, sizeof(preamble_silicon), &g_DemodBufferLen, &startIdx, false) &&
-               (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) { 
+                    (g_DemodBufferLen == 32 || g_DemodBufferLen == 64)) {
                 return true;
             }
         } // inverse waves does not affect PSK2 demod
